@@ -18,6 +18,7 @@ import Id
 import Name
 import Type
 import FamInstEnv
+import Coercion
 import InstEnv
 import Class
 import Avail
@@ -33,8 +34,11 @@ import Module
 import NameSet
 import NameEnv
 import Rules
+import TysPrim (eqReprPrimTyCon)
+import TysWiredIn (coercibleTyCon )
 import BasicTypes       ( Activation(.. ) )
 import CoreMonad        ( endPass, CoreToDo(..) )
+import MkCore
 import FastString
 import ErrUtils
 import Outputable
@@ -347,6 +351,26 @@ Reason
 %************************************************************************
 
 \begin{code}
+
+unfold_coerce :: [Id] -> CoreExpr -> CoreExpr -> DsM ([Var], CoreExpr, CoreExpr)
+unfold_coerce bndrs lhs rhs = do
+    (bndrs', wrap) <- go bndrs
+    return (bndrs', wrap lhs, wrap rhs)
+  where
+    go :: [Id] -> DsM ([Id], CoreExpr -> CoreExpr)
+    go []     = return ([], id)
+    go (v:vs)
+        | Just (tc, args) <- splitTyConApp_maybe (idType v)
+        , tc == coercibleTyCon = do
+            let ty' = mkTyConApp eqReprPrimTyCon args
+            v' <- mkDerivedLocalM mkRepEqOcc v ty'
+
+            (bndrs, wrap) <- go vs
+            return (v':bndrs, mkCoreLet (NonRec v (mkEqBox (mkCoVarCo v'))) . wrap)
+        | otherwise = do
+            (bndrs,wrap) <- go vs
+            return (v:bndrs, wrap)
+
 dsRule :: LRuleDecl Id -> DsM (Maybe CoreRule)
 dsRule (L loc (HsRule name act vars lhs _tv_lhs rhs _fv_rhs))
   = putSrcSpanDs loc $
@@ -359,9 +383,11 @@ dsRule (L loc (HsRule name act vars lhs _tv_lhs rhs _fv_rhs))
         ; rhs' <- dsLExpr rhs
         ; dflags <- getDynFlags
 
+        ; (bndrs'', lhs'', rhs'') <- unfold_coerce bndrs' lhs' rhs'
+
         -- Substitute the dict bindings eagerly,
         -- and take the body apart into a (f args) form
-        ; case decomposeRuleLhs bndrs' lhs' of {
+        ; case decomposeRuleLhs bndrs'' lhs'' of {
                 Left msg -> do { warnDs msg; return Nothing } ;
                 Right (final_bndrs, fn_id, args) -> do
 
@@ -370,7 +396,7 @@ dsRule (L loc (HsRule name act vars lhs _tv_lhs rhs _fv_rhs))
                 -- we don't want to attach rules to the bindings of implicit Ids,
                 -- because they don't show up in the bindings until just before code gen
               fn_name   = idName fn_id
-              final_rhs = simpleOptExpr rhs'    -- De-crap it
+              final_rhs = simpleOptExpr rhs''    -- De-crap it
               rule      = mkRule False {- Not auto -} is_local
                                  name act fn_name final_bndrs args final_rhs
 
