@@ -1154,10 +1154,20 @@ coerceId = pcMiscPrelId coerceName ty info
     eqRPrimTy = mkTyConApp eqReprPrimTyCon [k, aTy, bTy]
     ty   = mkForAllTys [kv, a, b] (mkFunTys [eqRTy, aTy] bTy)
 
-    [eqR,x,eq] = mkTemplateLocals [eqRTy, aTy,eqRPrimTy]
-    rhs = mkLams [kv,a,b,eqR,x] $
+    [eqR,eq] = mkTemplateLocals [eqRTy, eqRPrimTy]
+    rhs = mkLams [kv,a,b,eqR] $
           mkWildCase (Var eqR) eqRTy bTy $
-	  [(DataAlt coercibleDataCon, [eq], Cast (Var x) (CoVarCo eq))]
+	  [(DataAlt coercibleDataCon, [eq], mkCastId (CoVarCo eq))]
+
+-- Turns co :: a ~#R b coercion into
+--  (\x -> x) |> (<a>_R -> co)
+-- which allows the unfoldings ofunsafeCoerce and coerce to have a lower arity
+mkCastId :: Coercion -> CoreExpr
+mkCastId co = Cast (mkLams [x] (Var x))
+                   (mkFunCo Representational (mkReflCo Representational aTy) co)
+ where
+    Pair aTy _ = coercionKind co
+    [x] = mkTemplateLocals [aTy]
 \end{code}
 
 Note [Unsafe coerce magic]
