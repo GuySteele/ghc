@@ -966,6 +966,9 @@ simple_app subst (Lam b e) (a:as)
   where
     (subst', b') = subst_opt_bndr subst b
     b2 = add_info subst' b b'
+simple_app subst (Var v) as
+  | isCompulsoryUnfolding (idUnfolding v)
+  =  simple_app subst (unfoldingTemplate (idUnfolding v)) as
 simple_app subst e as
   = foldl App (simple_opt_expr subst e) as
 
